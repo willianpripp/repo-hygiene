@@ -43,9 +43,16 @@ A repo is held to a named profile, never an inferred one, so a repo flipping fro
 | `public-portfolio` | a repo published for strangers to read, clone and judge | full: license, README structure, working links, a runnable quickstart, CI |
 | `private-work` | a repo you work in but never publish | lighter: description, a README that orients, working links, no tracked secrets |
 | `skills-repo` | a directory of reusable, versioned building blocks | drift checks: does an index cover every block, is the tree level with origin |
+| `vault` | a notes or knowledge vault, markdown all the way down | metadata and safety only: almost every documentation check is OFF, because a vault is supposed to look like that |
 | `gitlab-work` | reserved, not implemented | the script refuses this profile with a clear message rather than silently applying the GitHub bar |
 
 Assignments (which repo gets which profile) and any repo-specific exclusions are meant to live in a small private overlay file that gets deep-merged onto `checklist.yaml` at run time, so one person's private repo list never has to live in a public checklist. `--overlay PATH` points at one, `--no-overlay` ignores it. In CI there normally is no overlay at all, which is exactly why `--profile` is a required flag there: with no assignments to fall back on, the tool refuses to guess a bar for you.
+
+## Coverage is checked too
+
+A sweep does not only audit the repos it was told about. It enumerates the owner's repos from the API and reconciles them against the overlay, so a repo that was created and never added is reported as UNASSIGNED and fails the run. Without that, coverage would silently depend on somebody remembering to update a list, which is the same failure mode as having no standard at all.
+
+An archived repo counts as accounted for only when it is in `excluded`, not merely assigned a profile: a profile implies ongoing work that an archived, read-only repo no longer has.
 
 ## Read-only, by design
 

@@ -125,6 +125,42 @@ profiles:
       index_covers_skills: MUST
       level_with_origin: SHOULD
 
+  vault:
+    description: >
+      A notes or knowledge vault (Obsidian and friends): markdown all the way
+      down, read by its author through an app, not by a stranger through a
+      README. Almost every documentation check is OFF here on purpose. A vault
+      is SUPPOSED to be hundreds of markdown files with no quickstart, so
+      holding it to the software bar produces findings that are all noise, and
+      noise is how a checker gets ignored. What genuinely matters for a vault
+      is that nothing secret was ever committed into it.
+    checks:
+      has_description: MUST
+      has_topics: OFF
+      license_declared: OFF
+      license_file: OFF
+      default_branch_main: SHOULD
+      no_tracked_secrets: MUST
+      no_tracked_agent_instructions: MUST
+      gitignore_present: MUST
+      readme_present: OFF
+      readme_has_intro: OFF
+      readme_has_quickstart: OFF
+      readme_has_stack: OFF
+      readme_links_resolve: OFF
+      readme_has_screenshots: OFF
+      readme_has_running_for_real: OFF
+      readme_has_how_built: OFF
+      quickstart_artifact: OFF
+      env_example_present: OFF
+      demo_path: OFF
+      ci_workflow_present: OFF
+      root_md_budget: OFF
+      root_md_linked: OFF
+      status_doc: OFF
+      index_covers_skills: OFF
+      level_with_origin: OFF
+
   # Reserved, deliberately unimplemented. Work repos live on the Bence GitLab
   # and carry company conventions (issue-per-change, MR-first, sprint folders)
   # that this file has not modelled yet. audit.py must refuse this profile with

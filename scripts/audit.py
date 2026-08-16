@@ -612,6 +612,81 @@ def suggestion_for(facts: RepoFacts, result: CheckResult, settings: dict[str, An
     return fn(facts, result, settings)
 
 
+# --------------------------------------------------------------------------
+# Enumeration reconciliation: is every repo the owner actually has on GitHub
+# accounted for by the overlay, one way or another?
+#
+# A sweep with no --repo/--here used to just iterate `assignments`, which
+# makes it structurally blind to a repo that was created and never added -
+# the standard silently does not apply, and nothing ever says so. Enumerating
+# the owner's real repos and reconciling against assignments/excluded closes
+# that hole: a forgotten repo becomes a loud finding instead of a silent gap.
+# --------------------------------------------------------------------------
+
+
+def owners_from_assignments(assignments: dict[str, str]) -> list[str]:
+    """Assignment keys are always owner/name, so the owner(s) to enumerate
+    are derived from the overlay itself rather than hardcoded - a second
+    owner in a future overlay is picked up for free."""
+    return sorted({repo.split("/", 1)[0] for repo in assignments if "/" in repo})
+
+
+def reconcile_enumeration(
+    enumerated: list[dict[str, Any]], assignments: dict[str, str], excluded: dict[str, str]
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """`enumerated` is what the API actually returns right now for the
+    owner(s) - real repos, current names, post-rename (a repo that was
+    renamed shows up only under its current name, never as a phantom old one,
+    precisely because this reconciles against live API data instead of any
+    name seen elsewhere, such as a stale local clone's remote).
+
+    Returns (unassigned, informational).
+
+    `excluded` is what closes the loop for any repo, archived or not: being
+    in `excluded` (whatever the reason) always means "accounted for."
+
+    `assignments` closes the loop for a normal, non-archived repo. It does
+    NOT close the loop for an archived one: a profile implies ongoing work or
+    a live publication, neither of which an archived repo still has, so an
+    archived repo needs a deliberate retirement note in `excluded` instead of
+    just sitting in `assignments` from before it was archived. That is the
+    exact situation a repo is in when it gets archived and nobody updates
+    the overlay it was already listed in.
+
+    So: excluded -> accounted for (archived ones also get an informational
+    note, just for visibility, since a reader may want to know a repo was
+    consciously retired rather than simply absent from the report).
+    Not excluded + archived -> unassigned, regardless of assignments.
+    Not excluded + not archived + in assignments -> accounted for.
+    Not excluded + not archived + not in assignments -> unassigned.
+    """
+    unassigned: list[dict[str, Any]] = []
+    informational: list[dict[str, Any]] = []
+    for entry in enumerated:
+        repo = entry["repo"]
+        archived = bool(entry.get("archived", False))
+        if repo in excluded:
+            if archived:
+                informational.append({"repo": repo, "archived": True, "reason": excluded[repo]})
+            continue
+        if archived:
+            unassigned.append({"repo": repo, "archived": True, "reason": "archived but not in excluded"})
+        elif repo not in assignments:
+            unassigned.append({"repo": repo, "archived": False, "reason": "not in assignments or excluded"})
+    return unassigned, informational
+
+
+def suggestion_for_unassigned(finding: dict[str, Any], settings: dict[str, Any]) -> str:
+    repo = finding["repo"]
+    if finding.get("archived"):
+        return (
+            f"Add {repo} to the overlay's `excluded` map with a reason. Archived repos are usually best "
+            "excluded rather than left in `assignments`: a profile implies ongoing work or a live "
+            "publication, and an archived repo no longer has either."
+        )
+    return f"Add {repo} to the overlay's `assignments` with a profile, or to `excluded` with a reason."
+
+
 def run_checks(facts: RepoFacts, profile_checks: dict[str, str], settings: dict[str, Any]) -> list[CheckResult]:
     results: list[CheckResult] = []
     for check_id, raw_tier in profile_checks.items():
@@ -727,6 +802,23 @@ def gh_api(path: str, jq: str | None = None) -> Any:
         raise GhError(f"gh api {path} returned unparsable output: {e}") from e
 
 
+def list_owner_repos(owner: str) -> list[dict[str, Any]]:
+    """All of an owner's repos, public and private, via one `gh repo list`
+    invocation - gh paginates the underlying API internally, so this stays a
+    single call from our side. Deliberately not `users/{owner}/repos`: that
+    REST endpoint is public-only regardless of auth, which would make every
+    private repo structurally invisible to the exact check meant to catch a
+    forgotten one."""
+    result = run_gh(["repo", "list", owner, "--limit", "1000", "--json", "nameWithOwner,isArchived"])
+    if result.returncode != 0:
+        raise GhError(f"gh repo list {owner} failed: {(result.stderr or result.stdout).strip()}")
+    try:
+        data = json.loads(result.stdout)
+    except json.JSONDecodeError as e:
+        raise GhError(f"gh repo list {owner} returned unparsable output: {e}") from e
+    return [{"repo": r["nameWithOwner"], "archived": bool(r.get("isArchived"))} for r in data]
+
+
 def gather_repo_facts(repo: str, profile: str, settings: dict[str, Any]) -> RepoFacts:
     meta = gh_api(f"repos/{repo}")
     if meta is None:
@@ -827,11 +919,28 @@ class RepoRun:
     error: str | None = None
 
 
+@dataclass
+class EnumerationResult:
+    """`ran` distinguishes "checked, found zero" from "did not check" - the
+    latter (no overlay, --no-enumerate, or a targeted --repo/--here run)
+    means the unassigned/informational lists say nothing about coverage and
+    must not be rendered as if they did."""
+
+    ran: bool
+    unassigned: list[dict[str, Any]]
+    informational: list[dict[str, Any]]
+
+
 def _indented_suggestion(text: str) -> str:
     return "\n".join(f"        > {line}" for line in text.splitlines())
 
 
-def render_table(results: list[RepoRun], settings: dict[str, Any] | None = None, suggest: bool = False) -> str:
+def render_table(
+    results: list[RepoRun],
+    settings: dict[str, Any] | None = None,
+    suggest: bool = False,
+    enumeration: EnumerationResult | None = None,
+) -> str:
     lines: list[str] = []
     summary_rows: list[tuple[str, str, str]] = []
     for run in results:
@@ -866,6 +975,24 @@ def render_table(results: list[RepoRun], settings: dict[str, Any] | None = None,
         lines.append("")
         summary_rows.append((run.repo, str(len(musts)), str(len(shoulds))))
 
+    if enumeration is not None and enumeration.ran:
+        lines.append("UNASSIGNED")
+        if enumeration.unassigned:
+            for u in enumeration.unassigned:
+                lines.append(f"  FAIL  {u['repo']:<28} {u['reason']}")
+                if suggest:
+                    assert settings is not None
+                    lines.append(_indented_suggestion(suggestion_for_unassigned(u, settings)))
+        else:
+            lines.append("  none: every enumerated repo is in assignments or excluded")
+        lines.append("")
+
+        if enumeration.informational:
+            lines.append("ARCHIVED, EXCLUDED (informational, not a failure)")
+            for info in enumeration.informational:
+                lines.append(f"  info  {info['repo']:<28} {info['reason']}")
+            lines.append("")
+
     lines.append("SUMMARY")
     lines.append(f"{'repo':<42} {'MUST fail':>10} {'SHOULD fail':>12}")
     for repo, m, s in summary_rows:
@@ -873,12 +1000,25 @@ def render_table(results: list[RepoRun], settings: dict[str, Any] | None = None,
     return "\n".join(lines)
 
 
-def render_json(results: list[RepoRun], exit_code: int, settings: dict[str, Any] | None = None, suggest: bool = False) -> str:
+def render_json(
+    results: list[RepoRun],
+    exit_code: int,
+    settings: dict[str, Any] | None = None,
+    suggest: bool = False,
+    enumeration: EnumerationResult | None = None,
+) -> str:
     def check_payload(run: RepoRun, c: CheckResult) -> dict[str, Any]:
         entry = {"id": c.id, "tier": c.tier, "status": c.status, "detail": c.detail}
         if suggest:
             assert settings is not None and run.facts is not None
             entry["suggestion"] = suggestion_for(run.facts, c, settings)
+        return entry
+
+    def unassigned_payload(u: dict[str, Any]) -> dict[str, Any]:
+        entry = dict(u)
+        if suggest:
+            assert settings is not None
+            entry["suggestion"] = suggestion_for_unassigned(u, settings)
         return entry
 
     payload = {
@@ -893,6 +1033,10 @@ def render_json(results: list[RepoRun], exit_code: int, settings: dict[str, Any]
             }
             for run in results
         ],
+        # null (not []) when enumeration did not run at all, so a consumer can
+        # tell "confirmed zero" apart from "coverage was never checked."
+        "unassigned": [unassigned_payload(u) for u in enumeration.unassigned] if enumeration and enumeration.ran else None,
+        "archived_excluded": enumeration.informational if enumeration and enumeration.ran else None,
         "exit_code": exit_code,
     }
     return json.dumps(payload, indent=2)
@@ -920,6 +1064,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="print the exact command/edit that would fix each FAIL - print only, never executed",
     )
+    parser.add_argument(
+        "--no-enumerate",
+        action="store_true",
+        help="skip enumerating the owner's repos to find ones missing from the overlay (faster, or offline)",
+    )
     parser.add_argument("--self-test", action="store_true", help="run offline fixture assertions and exit")
     return parser
 
@@ -936,6 +1085,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"error: {e}", file=sys.stderr)
         return 2
 
+    overlay_loaded = False
     if not args.no_overlay:
         explicit_overlay = args.overlay is not None
         overlay_path = Path(args.overlay) if explicit_overlay else DEFAULT_OVERLAY_PATH
@@ -946,6 +1096,7 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"error: {e}", file=sys.stderr)
                 return 2
             checklist = merge_overlay(checklist, overlay)
+            overlay_loaded = True
         elif explicit_overlay:
             # An explicit --overlay is a deliberate ask; a missing default
             # path just means "no overlay today" and is not an error.
@@ -963,6 +1114,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"error: {e}", file=sys.stderr)
         return 2
 
+    is_full_sweep = not args.repo and not args.here
     if args.repo:
         targets = [args.repo]
     elif args.here:
@@ -973,6 +1125,22 @@ def main(argv: list[str] | None = None) -> int:
             return 2
     else:
         targets = [r for r in assignments if r not in excluded]
+
+    # Enumeration reconciliation only makes sense on a full sweep (targeting
+    # one repo already names it explicitly, so there's nothing to reconcile),
+    # only when an overlay actually supplied assignments to reconcile against,
+    # and only when not explicitly skipped.
+    enumeration: EnumerationResult | None = None
+    if is_full_sweep and overlay_loaded and not args.no_enumerate:
+        try:
+            enumerated: list[dict[str, Any]] = []
+            for owner in owners_from_assignments(assignments):
+                enumerated.extend(list_owner_repos(owner))
+        except GhError as e:
+            print(f"error: repo enumeration failed: {e}", file=sys.stderr)
+            return 2
+        unassigned, informational = reconcile_enumeration(enumerated, assignments, excluded)
+        enumeration = EnumerationResult(ran=True, unassigned=unassigned, informational=informational)
 
     results: list[RepoRun] = []
     for repo in targets:
@@ -1008,12 +1176,15 @@ def main(argv: list[str] | None = None) -> int:
 
     any_must_failed = any(c.tier == "MUST" and c.status == "FAIL" for r in results for c in r.checks)
     any_errored = any(r.error is not None for r in results)
-    exit_code = 2 if any_errored else (1 if any_must_failed else 0)
+    # An unassigned repo is treated like a MUST failure for exit-code purposes
+    # on purpose: the whole point of enumerating is that it cannot be ignored.
+    any_unassigned = bool(enumeration and enumeration.unassigned)
+    exit_code = 2 if any_errored else (1 if (any_must_failed or any_unassigned) else 0)
 
     if args.json:
-        print(render_json(results, exit_code, settings, args.suggest))
+        print(render_json(results, exit_code, settings, args.suggest, enumeration))
     else:
-        print(render_table(results, settings, args.suggest))
+        print(render_table(results, settings, args.suggest, enumeration))
     return exit_code
 
 
@@ -1394,6 +1565,72 @@ def run_self_test() -> int:
     expect(
         "suggestion: no_tracked_secrets warns about git history",
         str("history" in secrets_suggestion),
+        "True",
+    )
+
+    # -- owners_from_assignments: unique owners, sorted -----------------------
+    expect(
+        "owners_from_assignments: derives unique, sorted owners",
+        str(owners_from_assignments({"acme/x": "p", "acme/y": "p", "beta/z": "p"})),
+        "['acme', 'beta']",
+    )
+
+    # -- reconcile_enumeration: the enumeration-vs-overlay reconciliation that
+    #    makes an unassigned repo a loud finding instead of a silent gap. Each
+    #    case below is one of the required fixtures: missing from both maps
+    #    (fails), present in assignments (passes), present in excluded
+    #    (passes), and archived-and-excluded (informational, does not fail).
+    #    A fifth covers the rule that forces an archived repo into
+    #    excluded: archived-but-still-in-assignments still fails. ------------
+    enum_assignments = {"acme/widget": "public-portfolio", "acme/tool": "private-work"}
+    enum_excluded = {"acme/scratch": "work scratch, not a project"}
+
+    # missing from both maps -> unassigned, and a failure
+    missing_case = [{"repo": "acme/forgotten", "archived": False}]
+    unassigned, informational = reconcile_enumeration(missing_case, enum_assignments, enum_excluded)
+    expect("reconcile: repo in neither map is unassigned", str([u["repo"] for u in unassigned]), "['acme/forgotten']")
+    expect("reconcile: repo in neither map has no informational entry", str(informational), "[]")
+
+    # present in assignments (non-archived) -> accounted for, no finding
+    assigned_case = [{"repo": "acme/widget", "archived": False}]
+    unassigned, informational = reconcile_enumeration(assigned_case, enum_assignments, enum_excluded)
+    expect("reconcile: assigned repo is not unassigned", str(unassigned), "[]")
+
+    # present in excluded (non-archived) -> accounted for, no finding at all
+    excluded_case = [{"repo": "acme/scratch", "archived": False}]
+    unassigned, informational = reconcile_enumeration(excluded_case, enum_assignments, enum_excluded)
+    expect("reconcile: excluded repo is not unassigned", str(unassigned), "[]")
+    expect("reconcile: non-archived excluded repo gets no informational note", str(informational), "[]")
+
+    # archived AND excluded -> informational, explicitly not a failure
+    archived_excluded_case = [{"repo": "acme/scratch", "archived": True}]
+    unassigned, informational = reconcile_enumeration(archived_excluded_case, enum_assignments, enum_excluded)
+    expect("reconcile: archived+excluded is not a failure", str(unassigned), "[]")
+    expect("reconcile: archived+excluded produces an informational entry", str(informational[0]["repo"]), "acme/scratch")
+
+    # archived but only in assignments, NOT in excluded -> still unassigned,
+    # still fails - the scenario of a repo archived while its overlay entry
+    # still sits in assignments rather than excluded.
+    archived_assigned_case = [{"repo": "acme/tool", "archived": True}]
+    unassigned, informational = reconcile_enumeration(archived_assigned_case, enum_assignments, enum_excluded)
+    expect(
+        "reconcile: archived-but-only-assigned still fails",
+        str([u["repo"] for u in unassigned]),
+        "['acme/tool']",
+    )
+
+    # -- suggestion_for_unassigned: both remedies named for the plain case,
+    #    excluded specifically recommended for the archived case. ------------
+    plain_suggestion = suggestion_for_unassigned({"repo": "acme/forgotten", "archived": False}, settings)
+    expect(
+        "suggestion_for_unassigned: plain case names both remedies",
+        str(all(s in plain_suggestion for s in ["assignments", "excluded"])),
+        "True",
+    )
+    archived_suggestion = suggestion_for_unassigned({"repo": "acme/tool", "archived": True}, settings)
+    expect(
+        "suggestion_for_unassigned: archived case recommends excluded",
+        str("excluded" in archived_suggestion),
         "True",
     )
 
