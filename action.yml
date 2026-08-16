@@ -1,0 +1,60 @@
+name: Repo Hygiene
+description: >-
+  Audit a repository against a minimum project-infrastructure bar: description,
+  topics, licence, README structure, working relative links, a runnable
+  quickstart, CI, and documentation sprawl. Read-only.
+author: Willian Pripp
+
+branding:
+  icon: check-square
+  color: green
+
+inputs:
+  profile:
+    description: >-
+      Which bar to hold this repo to. One of public-portfolio, private-work,
+      vault, skills-repo. Required, and deliberately so: with no overlay
+      present there are no assignments to infer a profile from, and guessing
+      one would mean silently changing the standard a repo is held to.
+    required: true
+  repository:
+    description: The owner/name to audit. Defaults to the calling repository.
+    required: false
+    default: ${{ github.repository }}
+  suggest:
+    description: Print the exact remedy for each finding. "true" or "false".
+    required: false
+    default: "false"
+  github-token:
+    description: >-
+      Token used for the read-only API calls. The default job token is enough
+      for a repo auditing itself.
+    required: false
+    default: ${{ github.token }}
+
+runs:
+  using: composite
+  steps:
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: "3.11"
+
+    - name: Install PyYAML
+      shell: bash
+      run: pip install --quiet pyyaml
+
+    # The auditor's own tests, offline, before anything touches the network.
+    # A checker whose self-test fails has no business reporting on your repo.
+    - name: Self-test
+      shell: bash
+      run: python3 "${{ github.action_path }}/scripts/audit.py" --self-test
+
+    - name: Audit
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+      run: |
+        args=(--repo "${{ inputs.repository }}" --profile "${{ inputs.profile }}" --no-overlay)
+        if [ "${{ inputs.suggest }}" = "true" ]; then args+=(--suggest); fi
+        python3 "${{ github.action_path }}/scripts/audit.py" "${args[@]}"

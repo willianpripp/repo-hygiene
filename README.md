@@ -72,6 +72,23 @@ python3 scripts/audit.py --repo octocat/hello-world --profile public-portfolio -
 
 ## Running it for real (CI)
 
+The short way is the composite action, pinned to a tag so a change here cannot
+turn your repos red without you choosing it:
+
+```yaml
+- uses: willianpripp/repo-hygiene@v1
+  with:
+    profile: public-portfolio
+```
+
+That is the whole job. It sets up Python, installs the one dependency, runs the
+auditor's own self-test offline first, then audits the calling repository. Add
+`suggest: "true"` to have every finding print the exact command that fixes it.
+
+### The long way, without the action
+
+
+
 Copy [`WORKFLOW_TEMPLATE.yml`](WORKFLOW_TEMPLATE.yml) into `.github/workflows/hygiene.yml` in the repo you want checked. It checks out this repo alongside yours and runs:
 
 ```bash
