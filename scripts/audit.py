@@ -67,6 +67,15 @@ class RepoFacts:
     local_behind: int | None = None
     local_dir_names: list[str] | None = None
     local_index_text: str | None = None
+    # Set instead of the fields above when the local working copy this check
+    # needs isn't on this host at all (a sweep box that only has GitHub
+    # access, not the laptop's filesystem) - the reason a local-only check
+    # must SKIP, not FAIL: a missing path is not evidence of drift.
+    local_skills_unavailable: str | None = None
+    # Set when skills_local_path exists but isn't a usable git working copy
+    # against an `origin` remote - only level_with_origin cares about this;
+    # index_covers_skills only needs a directory listing, not git-ness.
+    local_git_unavailable: str | None = None
 
 
 @dataclass
@@ -355,7 +364,14 @@ def check_status_doc(facts: RepoFacts, settings: dict[str, Any]) -> tuple[str, s
 
 
 def check_index_covers_skills(facts: RepoFacts, settings: dict[str, Any]) -> tuple[str, str]:
+    if facts.local_skills_unavailable is not None:
+        # Cannot be evaluated on this host, not "evaluated and clean" - a
+        # missing working copy must never read as a silent PASS either.
+        return "SKIP", facts.local_skills_unavailable
     if facts.local_dir_names is None or facts.local_index_text is None:
+        # Facts were never even attempted (this check reached without the
+        # skills-repo gathering step running at all) - a real bug, not an
+        # absent-host situation, so it stays a loud FAIL.
         return "FAIL", "local skills directory facts were not gathered"
     exempt = settings.get("skills_index_exempt", [])
     uncovered = [
@@ -381,6 +397,10 @@ def check_no_tracked_agent_instructions(facts: RepoFacts, settings: dict[str, An
 
 
 def check_level_with_origin(facts: RepoFacts, settings: dict[str, Any]) -> tuple[str, str]:
+    if facts.local_skills_unavailable is not None:
+        return "SKIP", facts.local_skills_unavailable
+    if facts.local_git_unavailable is not None:
+        return "SKIP", facts.local_git_unavailable
     if facts.local_status_porcelain is None or facts.local_ahead is None or facts.local_behind is None:
         return "FAIL", "local git facts were not gathered"
     dirty = bool(facts.local_status_porcelain.strip())
@@ -570,6 +590,31 @@ def suggest_level_with_origin(facts: RepoFacts, result: CheckResult, settings: d
     return "Commit and push (git add, git commit, git push), or if intentionally diverged, note why in STATUS.md."
 
 
+# A local-only check's SKIP means "cannot be evaluated on this host," not
+# "nothing to check" (that's what env_example_present's SKIP means, and it
+# gets no suggestion at all - there's genuinely nothing to say). These two
+# get a suggestion naming what would have to be true to run them: never a
+# fix for a failure, since none was established.
+def suggest_skip_index_covers_skills(facts: RepoFacts, result: CheckResult, settings: dict[str, Any]) -> str:
+    return (
+        f"{result.detail}. Run this on the machine that holds the skills working copy, or point "
+        "`skills_local_path` (and `skills_index`) in the overlay at one that exists on this host."
+    )
+
+
+def suggest_skip_level_with_origin(facts: RepoFacts, result: CheckResult, settings: dict[str, Any]) -> str:
+    return (
+        f"{result.detail}. Run this on the machine that holds the working copy, or point "
+        "`skills_local_path` in the overlay at a usable git working copy on this host."
+    )
+
+
+LOCAL_SKIP_SUGGESTIONS: dict[str, SuggestFn] = {
+    "index_covers_skills": suggest_skip_index_covers_skills,
+    "level_with_origin": suggest_skip_level_with_origin,
+}
+
+
 SUGGESTIONS: dict[str, SuggestFn] = {
     "has_description": suggest_has_description,
     "has_topics": suggest_has_topics,
@@ -600,10 +645,14 @@ SUGGESTIONS: dict[str, SuggestFn] = {
 
 
 def suggestion_for(facts: RepoFacts, result: CheckResult, settings: dict[str, Any]) -> str | None:
-    """None for anything that isn't a FAIL (PASS, SKIP): a suggestion only
-    makes sense next to a real defect. Missing a template for a known FAIL is
-    a checklist/audit.py mismatch the self-test assertion is meant to catch
-    before this ever runs against a real repo."""
+    """None for most things that aren't a FAIL (PASS, ordinary SKIP): a
+    suggestion only makes sense next to a real defect. The local-only checks
+    are the one carve-out - see LOCAL_SKIP_SUGGESTIONS. Missing a template
+    for a known FAIL is a checklist/audit.py mismatch the self-test assertion
+    is meant to catch before this ever runs against a real repo."""
+    if result.status == "SKIP":
+        fn = LOCAL_SKIP_SUGGESTIONS.get(result.id)
+        return fn(facts, result, settings) if fn else None
     if result.status != "FAIL":
         return None
     fn = SUGGESTIONS.get(result.id)
@@ -865,8 +914,17 @@ def _run_git(args: list[str], cwd: str) -> subprocess.CompletedProcess[str]:
 def _attach_local_skills_facts(facts: RepoFacts, settings: dict[str, Any]) -> None:
     """skills-repo's whole point is catching drift between disk, the human
     index and origin, so (unlike every other profile) it needs the local
-    working copy, not just the GitHub API."""
-    local_path = settings["skills_local_path"]
+    working copy, not just the GitHub API. On a host that does not have that
+    working copy - a headless sweep box with GitHub access but not the
+    laptop's filesystem - there is nothing to gather. Setting
+    local_skills_unavailable (instead of leaving the fields below at their
+    None default and letting a git subprocess crash on a nonexistent cwd) is
+    what lets the two checks that need this SKIP cleanly instead of FAILing
+    on a condition nobody here can evaluate."""
+    local_path = settings.get("skills_local_path")
+    if not local_path or not Path(local_path).is_dir():
+        facts.local_skills_unavailable = f"no local working copy at {local_path!r} on this host"
+        return
 
     status = _run_git(["status", "--porcelain"], cwd=local_path)
     facts.local_status_porcelain = status.stdout if status.returncode == 0 else status.stderr
@@ -880,13 +938,24 @@ def _attach_local_skills_facts(facts: RepoFacts, settings: dict[str, Any]) -> No
     if rev_list.returncode == 0 and len(rev_list.stdout.split()) == 2:
         behind_str, ahead_str = rev_list.stdout.split()
         facts.local_behind, facts.local_ahead = int(behind_str), int(ahead_str)
+    else:
+        # Path exists but isn't a usable git working copy against an
+        # `origin` remote (no .git, no origin, detached with nothing to
+        # diff against, ...) - level_with_origin cannot be evaluated either,
+        # for the same "absent, not dirty" reason as the path-missing case.
+        detail = (rev_list.stderr or rev_list.stdout).strip() or "git rev-list failed"
+        facts.local_git_unavailable = f"{local_path} is not a usable git working copy against origin/{branch}: {detail}"
 
     facts.local_dir_names = sorted(
         p.name for p in Path(local_path).iterdir() if p.is_dir() and not p.name.startswith(".")
     )
 
-    index_path = Path(settings["skills_index"])
-    facts.local_index_text = index_path.read_text(encoding="utf-8", errors="replace") if index_path.exists() else ""
+    index_path_str = settings.get("skills_index")
+    facts.local_index_text = (
+        Path(index_path_str).read_text(encoding="utf-8", errors="replace")
+        if index_path_str and Path(index_path_str).exists()
+        else ""
+    )
 
 
 def resolve_repo_from_cwd() -> str:
@@ -970,6 +1039,16 @@ def render_table(
                 lines.append(_indented_suggestion(suggestion_for(facts, c, settings)))
         for c in skips:
             lines.append(f"  skip  {c.id:<28} {c.detail}")
+            if suggest:
+                assert settings is not None
+                # Unlike musts/shoulds, most SKIPs (env_example_present's
+                # "doesn't apply") get no suggestion at all - only the
+                # local-only checks' "cannot be evaluated here" SKIP does.
+                # suggestion_for returns None for the rest, so only print
+                # when there is actually something to say.
+                skip_suggestion = suggestion_for(facts, c, settings)
+                if skip_suggestion:
+                    lines.append(_indented_suggestion(skip_suggestion))
         if passes:
             lines.append(f"  ok    {len(passes)} passed: {', '.join(c.id for c in passes)}")
         lines.append("")
@@ -1521,6 +1600,90 @@ def run_self_test() -> int:
             _base_facts(local_status_porcelain=" M x.py\n", local_ahead=2, local_behind=1), settings
         )[0],
         "FAIL",
+    )
+
+    # -- local-only checks must SKIP, not FAIL or crash, when the working
+    #    copy they need is absent from this host (e.g. a sweep box that only
+    #    has GitHub access, not the laptop's filesystem). Both directions:
+    #    present+evaluable is unchanged (the four cases just above), absent
+    #    yields SKIP with a detail naming the missing path. --------------------
+    absent_facts = _base_facts(local_skills_unavailable="no local working copy at '/nonexistent' on this host")
+    expect(
+        "index_covers_skills SKIP when local working copy is absent",
+        check_index_covers_skills(absent_facts, settings)[0],
+        "SKIP",
+    )
+    expect(
+        "index_covers_skills SKIP detail names the missing path",
+        str("/nonexistent" in check_index_covers_skills(absent_facts, settings)[1]),
+        "True",
+    )
+    expect(
+        "level_with_origin SKIP when local working copy is absent",
+        check_level_with_origin(absent_facts, settings)[0],
+        "SKIP",
+    )
+
+    # Path present but not a usable git working copy against origin: only
+    # level_with_origin cares about git-ness, so index_covers_skills (which
+    # only needs a directory listing) must keep evaluating normally - proves
+    # the two unavailable-reason fields are independent, not one flag.
+    not_a_git_repo_facts = _base_facts(
+        local_dir_names=["alpha"],
+        local_index_text="- alpha: does things",
+        local_git_unavailable="/some/path is not a usable git working copy against origin/main: fatal: no origin",
+    )
+    expect(
+        "level_with_origin SKIP when path exists but isn't a usable git working copy",
+        check_level_with_origin(not_a_git_repo_facts, settings)[0],
+        "SKIP",
+    )
+    expect(
+        "index_covers_skills still evaluates normally when only git-ness is unavailable",
+        check_index_covers_skills(not_a_git_repo_facts, settings)[0],
+        "PASS",
+    )
+
+    # -- SKIP must not count as MUST/SHOULD failure, even at MUST tier, and
+    #    must not silently read as a pass either - exercised through the
+    #    actual run_checks path, not just the bare check function. ----------
+    skills_repo_checks = {"index_covers_skills": "MUST", "level_with_origin": "SHOULD"}
+    skip_run_results = run_checks(absent_facts, skills_repo_checks, settings)
+    expect(
+        "run_checks: absent working copy yields SKIP status for both, not PASS/FAIL",
+        str(sorted(r.status for r in skip_run_results)),
+        "['SKIP', 'SKIP']",
+    )
+    expect(
+        "run_checks: a SKIPped MUST does not count as a MUST failure for exit-code purposes",
+        str(any(r.tier == "MUST" and r.status == "FAIL" for r in skip_run_results)),
+        "False",
+    )
+
+    # -- --suggest for a SKIPped local check: names what would have to be
+    #    true to evaluate it, not a fix for a failure that was never
+    #    established. A different check's SKIP (env_example_present, which
+    #    means "doesn't apply" rather than "cannot be evaluated") still gets
+    #    no suggestion at all - the carve-out is narrow, not blanket. --------
+    index_skip_result = CheckResult("index_covers_skills", "MUST", "SKIP", absent_facts.local_skills_unavailable)
+    index_skip_suggestion = suggestion_for(absent_facts, index_skip_result, settings) or ""
+    expect(
+        "suggestion_for: SKIPped index_covers_skills names the remedy, not a fix",
+        str("Run this on the machine" in index_skip_suggestion and "skills_local_path" in index_skip_suggestion),
+        "True",
+    )
+    origin_skip_result = CheckResult("level_with_origin", "SHOULD", "SKIP", not_a_git_repo_facts.local_git_unavailable)
+    origin_skip_suggestion = suggestion_for(not_a_git_repo_facts, origin_skip_result, settings) or ""
+    expect(
+        "suggestion_for: SKIPped level_with_origin names the remedy, not a fix",
+        str("Run this on the machine" in origin_skip_suggestion),
+        "True",
+    )
+    env_skip_result = CheckResult("env_example_present", "MUST", "SKIP", "not indicated")
+    expect(
+        "suggestion_for: an ordinary SKIP (env_example_present) still gets no suggestion",
+        str(suggestion_for(_base_facts(), env_skip_result, settings)),
+        "None",
     )
 
     # -- --suggest: every implemented check id must have a suggestion
