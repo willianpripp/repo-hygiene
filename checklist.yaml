@@ -217,7 +217,7 @@ settings:
   readme_names: ["README.md", "readme.md", "README"]
   readme_intro_min_words: 20
   section_patterns:
-    quickstart: "(quick ?start|getting started|running|run it|how to run|install|usage)"
+    quickstart: "(quick ?start|getting started|running|run it|how to run|operating|install|usage)"
     stack: "(stack|built with|architecture|how it works|tech)"
     running_for_real: "(running (it )?for real|in production|real deployment)"
     how_built: "(how (this|it) was built|built with claude|development process|how i built)"
