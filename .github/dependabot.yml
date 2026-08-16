@@ -1,0 +1,7 @@
+# Dependabot: the one thing that keeps working while nobody is looking.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly

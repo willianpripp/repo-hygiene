@@ -1,10 +1,8 @@
 name: hygiene
 
-# push + pull_request catch a regression the moment it lands. workflow_dispatch
-# is for a manual rerun. The weekly schedule exists because metadata checks
-# (description, topics, license) have nothing to push: someone can clear the
-# repo description in the GitHub UI with zero commits, and only a schedule
-# ever notices that kind of drift.
+# The weekly schedule exists because metadata checks (description, topics,
+# licence) have nothing to push: a description cleared in the GitHub UI produces
+# no commit, and only a schedule ever notices that kind of drift.
 on:
   push:
     branches: [main]
@@ -22,16 +20,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
+      # The local copy, deliberately, not a pinned release of itself: this repo
+      # must be judged by the bar in the commit under test, so a change that
+      # would break the standard fails here before it is ever tagged.
+      - uses: ./
         with:
-          python-version: "3.11"
-
-      - run: pip install pyyaml
-
-      - name: self-test (offline fixtures, no network)
-        run: python3 scripts/audit.py --self-test
-
-      - name: audit this repo
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: python3 scripts/audit.py --repo ${{ github.repository }} --profile public-portfolio
+          profile: public-portfolio
+          suggest: "true"
