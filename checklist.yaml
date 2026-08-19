@@ -1,0 +1,275 @@
+# Repo hygiene standard.
+#
+# This file IS the generic standard: the bar any repo could be held to, with
+# no reference to whose repos these are or where they live on disk. Machine
+# specific data (which repo gets which profile, which repos are excluded,
+# local filesystem paths) lives in a private overlay.yaml next to this file
+# and is deep-merged in by scripts/audit.py at run time - see that file's
+# load_checklist/load_overlay/merge_overlay and the --overlay/--no-overlay
+# flags. Change the generic bar here; change the assignments there.
+#
+# Tiers:
+#   MUST   - a failure is a real defect. Nonzero exit. Blocks going public.
+#   SHOULD - worth fixing, reported, does not fail the run.
+#   OFF    - check does not apply to this profile.
+#
+# I derived this bar from the repos of mine that already agreed on a shape,
+# not from generic open-source advice. A standard nobody follows is worse than
+# no standard, so every entry here started life as something I actually do.
+# Ratified: 2026-08-16 (first pass, subject to revision after the first sweep).
+#
+# Decision (2026-08-16): has_topics is OFF for private-work and
+# skills-repo, MUST only for public-portfolio. Topics exist so a stranger can
+# discover a repo through GitHub search or browse; nothing discovers a
+# private repo, so the check has no one to serve there. A check that warns on
+# most of a person's private repos, forever, with no fix that changes
+# anything, is a check people learn to stop reading, and once a checklist
+# trains that reflex it stops working on the failures that do matter.
+
+version: 1
+
+profiles:
+
+  public-portfolio:
+    description: >
+      A repo published for people to read, clone and judge. Someone lands on it
+      cold, with no access to the LAN it normally runs on.
+    checks:
+      has_description: MUST
+      has_topics: MUST
+      license_declared: MUST
+      license_file: MUST
+      default_branch_main: SHOULD
+      no_tracked_secrets: MUST
+      no_tracked_agent_instructions: MUST
+      gitignore_present: MUST
+      readme_present: MUST
+      readme_has_intro: MUST
+      readme_has_quickstart: MUST
+      readme_has_stack: SHOULD
+      readme_links_resolve: MUST
+      docs_links_resolve: MUST
+      readme_has_screenshots: SHOULD
+      readme_has_running_for_real: SHOULD
+      readme_has_how_built: SHOULD
+      readme_has_structure: SHOULD
+      no_work_identifiers: MUST
+      quickstart_artifact: MUST
+      env_example_present: MUST
+      demo_path: SHOULD
+      ci_workflow_present: MUST
+      root_md_budget: SHOULD
+      root_md_linked: SHOULD
+      status_doc: OFF
+      index_covers_skills: OFF
+      level_with_origin: OFF
+
+  private-work:
+    description: >
+      A repo that is worked in, not published. The reader is you in six
+      months, or a session resuming cold. Deliberately a lower bar: nagging a
+      working repo about CONTRIBUTING is how a checker gets abandoned.
+    checks:
+      has_description: MUST
+      has_topics: OFF  # see decision note at top of file
+      license_declared: OFF
+      license_file: OFF
+      default_branch_main: SHOULD
+      no_tracked_secrets: MUST
+      no_tracked_agent_instructions: MUST
+      gitignore_present: MUST
+      readme_present: MUST
+      readme_has_intro: MUST
+      readme_has_quickstart: SHOULD
+      readme_has_stack: OFF
+      readme_links_resolve: MUST
+      docs_links_resolve: MUST
+      readme_has_screenshots: OFF
+      readme_has_running_for_real: OFF
+      readme_has_how_built: OFF
+      readme_has_structure: SHOULD
+      no_work_identifiers: OFF
+      quickstart_artifact: SHOULD
+      env_example_present: SHOULD
+      demo_path: OFF
+      # OFF, and this is a decision rather than a silenced finding: private
+      # repos are covered by a weekly sweep on an always-on host, which runs
+      # this same auditor against every repo including these. Per-repo CI
+      # would burn the private-repo Actions allowance to answer a question
+      # something else already answers. Note the limit honestly: neither the
+      # sweep nor a hygiene workflow runs a repo's TESTS. That is a separate
+      # gap, tracked per repo, not something this check was ever measuring.
+      ci_workflow_present: OFF
+      root_md_budget: SHOULD
+      root_md_linked: SHOULD
+      status_doc: SHOULD
+      index_covers_skills: OFF
+      level_with_origin: OFF
+
+  skills-repo:
+    description: >
+      The claude-skills working copy, which is also a live directory Claude
+      loads from. Its failure mode is drift between disk, index and origin,
+      not missing documentation.
+    checks:
+      has_description: MUST
+      has_topics: OFF  # see decision note at top of file
+      license_declared: OFF
+      license_file: OFF
+      default_branch_main: SHOULD
+      no_tracked_secrets: MUST
+      no_tracked_agent_instructions: MUST
+      gitignore_present: MUST
+      readme_present: SHOULD
+      readme_has_intro: OFF
+      readme_has_quickstart: OFF
+      readme_has_stack: OFF
+      readme_links_resolve: SHOULD
+      docs_links_resolve: SHOULD
+      readme_has_screenshots: OFF
+      readme_has_running_for_real: OFF
+      readme_has_how_built: OFF
+      readme_has_structure: SHOULD
+      no_work_identifiers: OFF
+      quickstart_artifact: OFF
+      env_example_present: OFF
+      demo_path: OFF
+      ci_workflow_present: SHOULD
+      root_md_budget: OFF
+      root_md_linked: OFF
+      status_doc: OFF
+      index_covers_skills: MUST
+      level_with_origin: SHOULD
+
+  vault:
+    description: >
+      A notes or knowledge vault (Obsidian and friends): markdown all the way
+      down, read by its author through an app, not by a stranger through a
+      README. Almost every documentation check is OFF here on purpose. A vault
+      is SUPPOSED to be hundreds of markdown files with no quickstart, so
+      holding it to the software bar produces findings that are all noise, and
+      noise is how a checker gets ignored. What genuinely matters for a vault
+      is that nothing secret was ever committed into it.
+    checks:
+      has_description: MUST
+      has_topics: OFF
+      license_declared: OFF
+      license_file: OFF
+      default_branch_main: SHOULD
+      no_tracked_secrets: MUST
+      no_tracked_agent_instructions: MUST
+      gitignore_present: MUST
+      readme_present: OFF
+      readme_has_intro: OFF
+      readme_has_quickstart: OFF
+      readme_has_stack: OFF
+      readme_links_resolve: OFF
+      docs_links_resolve: OFF
+      readme_has_screenshots: OFF
+      readme_has_running_for_real: OFF
+      readme_has_how_built: OFF
+      readme_has_structure: OFF
+      no_work_identifiers: OFF
+      quickstart_artifact: OFF
+      env_example_present: OFF
+      demo_path: OFF
+      ci_workflow_present: OFF
+      root_md_budget: OFF
+      root_md_linked: OFF
+      status_doc: OFF
+      index_covers_skills: OFF
+      level_with_origin: OFF
+
+settings:
+
+  # Metadata
+  min_topics: 3
+  default_branch: main
+
+  # Secrets: tracked paths matching these are a MUST failure. Matching is on
+  # the git index (tracked files), not the working tree, because an untracked
+  # .env is correct and normal.
+  secret_globs:
+    - ".env"
+    - "*.env"
+    - "**/.env"
+    - "*.pem"
+    - "*.key"
+    - "*.p12"
+    - "id_rsa*"
+    - "*service-account*.json"
+    - "*credentials*.json"
+  secret_glob_exceptions:
+    - "*.env.example"
+    - ".env.example"
+    - "**/.env.example"
+    - "*.env.sample"
+    - "**/vendor/**"
+
+  # Agent-instruction files are local plus gitignored, never committed
+  # (documentation for humans belongs in README/CONVENTIONS). These files
+  # carry working notes and local paths that mean nothing to a reader and go
+  # stale silently, and they are trivially forgotten in a first commit.
+  agent_instruction_globs:
+    - "CLAUDE.md"
+    - "**/CLAUDE.md"
+    - "AGENT.md"
+    - "AGENTS.md"
+    - ".cursorrules"
+    - ".windsurfrules"
+  # A repo may legitimately document the convention rather than carry it.
+  agent_instruction_exempt:
+    - "docs/**"
+
+  # README structure. Section matching is a case-insensitive regex against
+  # markdown headings only, so prose that happens to say "quick start" does
+  # not satisfy the check.
+  readme_names: ["README.md", "readme.md", "README"]
+  readme_intro_min_words: 20
+  section_patterns:
+    # Portuguese accepted for the same reason as `structure`: the question is
+    # whether a reader can find how to run it, not which language it is in.
+    quickstart: "(quick ?start|getting started|running|run it|how to run|operating|install|usage|uso|como (usar|rodar|executar))"
+    stack: "(stack|built with|architecture|how it works|tech)"
+    running_for_real: "(running (it )?for real|in production|real deployment)"
+    how_built: "(how (this|it) was built|built with claude|development process|how i built)"
+    # Portuguese included deliberately: some of these repos are written in it,
+    # and a heading that satisfies the intent should pass whatever language it
+    # is in. The check is "can a reader see the layout", not "is it English".
+    structure: "(project structure|repo(sitory)? structure|layout|where things live|repo (map|tour)|estrutura( de (arquivos|pastas|diret[oó]rios))?)"
+    # NOTE: readme_has_structure requires more than this heading. The section
+    # must contain an actual directory tree in a fenced block, not prose about
+    # one. Willian's rule, 2026-08-16: a tree shows the shape of the repo at a
+    # glance; a flat list makes you infer it from paths.
+  screenshot_markers:
+    - "docs/screenshots"
+    - "docs/img"
+    - "assets/screenshots"
+  # A README image embed also satisfies readme_has_screenshots.
+
+  # Runnable
+  quickstart_artifacts: ["Makefile", "docker-compose.yml", "docker/docker-compose.yml", "compose.yaml", "justfile"]
+  # docker/ added 2026-08-16: zone-trader keeps its example beside the compose
+  # file that consumes it, which is arguably the better place, and the check was
+  # reporting a genuine file as missing.
+  env_example_names: ["backend/.env.example", ".env.example", "app/.env.example", "env.example", "docker/.env.example", "compose/.env.example"]
+  # env_example_present only fires when the tree actually reads env vars.
+  env_usage_markers: ["os.environ", "os.getenv", "getenv(", "process.env", "${"]
+  demo_markers: ["demo", "seed_demo", "make demo", "fixtures", "sample-data"]
+
+  # CI
+  ci_globs: [".github/workflows/*.yml", ".github/workflows/*.yaml"]
+
+  # Doc sprawl. A root full of design docs that shipped years ago is the most
+  # common way a repo becomes unreadable without any single file being wrong.
+  root_md_budget: 6
+  root_md_always_allowed: ["README.md", "LICENSE.md", "CHANGELOG.md", "CONTRIBUTING.md"]
+
+  # State doc for working repos: where a cold session picks up.
+  status_doc_names: ["STATUS.md", "docs/STATUS.md", "OBJECTIVES.md"]
+
+  # skills-repo only. Directories covered collectively by a pack paragraph
+  # rather than a row. Listing them here is the deliberate exemption; an
+  # unlisted, unmentioned skill directory is a MUST failure. (The actual
+  # local path and index file to check against are machine-specific and live
+  # in the private overlay's settings, not here.)

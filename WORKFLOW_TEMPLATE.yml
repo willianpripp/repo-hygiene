@@ -1,0 +1,48 @@
+# Template for a consumer repo's CI. Copy this file to
+# .github/workflows/hygiene.yml in the consuming repo. Nothing in it needs
+# per-repo edits: github.repository resolves to that repo automatically.
+#
+# This repo (repo-hygiene) is the one place the checklist and the script
+# live; consumer repos fetch a copy of both at CI time instead of vendoring
+# their own, so all four repos are always held to the same, single version
+# of the standard.
+name: hygiene
+
+# push + pull_request catch a regression the moment it lands. workflow_dispatch
+# is for a manual rerun. The weekly schedule exists because metadata checks
+# (description, topics, license) have nothing to push: someone can clear the
+# repo description in the GitHub UI with zero commits, and only a schedule
+# ever notices that kind of drift.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 3 * * 1" # 03:17 UTC every Monday, off-peak
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - run: pip install pyyaml
+
+      - name: checkout repo-hygiene
+        uses: actions/checkout@v4
+        with:
+          repository: willianpripp/repo-hygiene
+          path: .repo-hygiene
+
+      - name: audit this repo
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 .repo-hygiene/scripts/audit.py --repo ${{ github.repository }} --profile public-portfolio

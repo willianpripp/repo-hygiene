@@ -1,0 +1,29 @@
+name: hygiene
+
+# The weekly schedule exists because metadata checks (description, topics,
+# licence) have nothing to push: a description cleared in the GitHub UI produces
+# no commit, and only a schedule ever notices that kind of drift.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 3 * * 1" # 03:17 UTC every Monday, off-peak
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # The local copy, deliberately, not a pinned release of itself: this repo
+      # must be judged by the bar in the commit under test, so a change that
+      # would break the standard fails here before it is ever tagged.
+      - uses: ./
+        with:
+          profile: public-portfolio
+          suggest: "true"
