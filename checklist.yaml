@@ -180,6 +180,49 @@ profiles:
       index_covers_skills: OFF
       level_with_origin: OFF
 
+  public-docs:
+    description: >
+      A public repo whose content is prose, not software: architecture notes,
+      decision records, threat models, incident write-ups, a GitHub profile
+      README. A stranger reads it cold, so every check about being readable and
+      about not leaking still applies at full strength. What does NOT apply is
+      the software bar: there is no command to run, so quickstart, a
+      Makefile/compose artifact, .env.example, demo data and CI are OFF. They
+      are not lowered, they are category errors here, and a gate that demands
+      docker-compose.yml from a profile README is a gate that gets bypassed
+      instead of obeyed. Distinct from `vault` because that one is private and
+      read by its author through an app; this one is published for strangers,
+      so the README and link checks stay MUST.
+    checks:
+      has_description: MUST
+      has_topics: MUST
+      license_declared: MUST
+      license_file: MUST
+      default_branch_main: SHOULD
+      no_tracked_secrets: MUST
+      no_tracked_agent_instructions: MUST
+      gitignore_present: MUST
+      readme_present: MUST
+      readme_has_intro: MUST
+      readme_has_quickstart: OFF
+      readme_has_stack: SHOULD
+      readme_links_resolve: MUST
+      docs_links_resolve: MUST
+      readme_has_screenshots: OFF
+      readme_has_running_for_real: OFF
+      readme_has_how_built: OFF
+      readme_has_structure: SHOULD
+      no_work_identifiers: MUST
+      quickstart_artifact: OFF
+      env_example_present: OFF
+      demo_path: OFF
+      ci_workflow_present: OFF
+      root_md_budget: SHOULD
+      root_md_linked: SHOULD
+      status_doc: OFF
+      index_covers_skills: OFF
+      level_with_origin: OFF
+
 settings:
 
   # Metadata
